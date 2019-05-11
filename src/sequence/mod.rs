@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 extern crate image;
 extern crate rayon;
 
@@ -9,8 +8,6 @@ mod base_converter;
 
 use self::bitfield::BitField;
 use self::base_converter::BaseConverter;
-
-use std::fs::File;
 
 use image::{
   Pixel,
@@ -25,8 +22,7 @@ use image::{
   Rgb,
   imageops,
 };
-// use rayon::prelude::*;
-// use rayon::iter::IterBridge;
+use rayon::prelude::*;
 
 pub enum SupportedImageFormats {
   GIF,
@@ -34,8 +30,17 @@ pub enum SupportedImageFormats {
   JPEG,
 }
 
-const IMG_WIDTH: u32 = 5;
-const IMG_HEIGHT: u32 = 5;
+impl SupportedImageFormats {
+  pub fn from(mimetype: String) -> Option<SupportedImageFormats> {
+    match mimetype.as_ref() {
+      "png" => Some(SupportedImageFormats::PNG),
+      "jpeg" => Some(SupportedImageFormats::JPEG),
+      "gif" => Some(SupportedImageFormats::GIF),
+      _ => None,
+    }
+  }
+}
+
 const COLOR_BIT_DEPTH: u32 = 8;
 
 type Col = [u8; 3];
@@ -58,105 +63,130 @@ struct RasterizationData {
 #[derive(Debug)]
 pub struct Sequence {
   dimensions: Dimensions,
-  frames: Vec<Vec<FramePixel>>,
+  matrix: Vec<Vec<FramePixel>>,
   min_delay: u16,
 }
 
 impl Sequence {
-  pub fn new(
-    buffer: File,
+  pub fn new<T>(
+    buffer: T,
     mimetype: SupportedImageFormats,
     bit_depth: u32,
     max_width: u32,
-  ) -> Sequence {
+  ) -> Result<Sequence, image::ImageError> where T: std::io::Read {
     let loss = 2_u32.pow(COLOR_BIT_DEPTH - bit_depth);
 
-    let bitfield = BitField::new(vec![bit_depth, bit_depth, bit_depth]);
+    let bitfield = BitField::new(
+      vec![bit_depth, bit_depth, bit_depth],
+    );
     let alphabet = String::from(
       "!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~",
     );
     let base_encoder = BaseConverter::new(alphabet);
 
     let data = to_seq(buffer, mimetype, max_width);
-    let dimensions = data.dimensions;
-    let (pixel_frames, delays): (Vec<PixelVec>, Vec<u16>) = data
-      .frames
-      .into_iter()
-      .unzip();
 
-    let min_delay = delays.iter().fold(2_u16.pow(15), |acc, delay| {
-      if delay < &acc {
-        *delay
-      } else {
-        acc
-      }
-    });
+    match data {
+      Err(err) => Err(err),
+      Ok(data) => {
+        let dimensions = data.dimensions;
+        let (pixel_frames, delays): (Vec<PixelVec>, Vec<u16>) = data
+          .frames
+          .into_par_iter()
+          .unzip();
 
-    let frames: Vec<Vec<FramePixel>> = pixel_frames
-      .iter()
-      .map(|pixels| {
-        let mut frame_stack: Vec<FramePixel> = Vec::new();
-        for pixel in pixels {
-          let resized_col = vec![
-            (pixel[0] as u32) / loss,
-            (pixel[1] as u32) / loss,
-            (pixel[2] as u32) / loss,
-          ];
-          let bf_col = bitfield.encode(resized_col);
-          let enc_col = base_encoder.encode(bf_col as usize);
+        let max = 2_u16.pow(15);
+        let min_delay = delays
+          .par_iter()
+          .reduce(|| &max, |acc, delay| {
+            if delay < &acc {
+              delay
+            } else {
+              acc
+            }
+          });
 
-          let prev = frame_stack.last_mut();
-          match prev {
-            Some(prev_pixel) => {
-              if prev_pixel.color == enc_col {
-                prev_pixel.duration += 1;
-              } else {
+        let mut matrix: Vec<Vec<FramePixel>> = Vec::with_capacity(
+          (dimensions.0 * dimensions.1) as usize,
+        );
+        for _ in 0..(dimensions.0 * dimensions.1) {
+          matrix.push(Vec::<FramePixel>::new());
+        }
+
+        let frame_iter: Vec<Vec<FramePixel>> = pixel_frames
+          .par_iter()
+          .map(|pixels| pixels.par_iter().map(|pixel| {
+            let resized_col = vec![
+              (pixel[0] as u32) / loss,
+              (pixel[1] as u32) / loss,
+              (pixel[2] as u32) / loss,
+            ];
+            let bf_col = bitfield.encode(resized_col);
+            let enc_col = base_encoder.encode(bf_col as usize);
+            FramePixel {
+              color: enc_col,
+              duration: 1_u16,
+            }
+          }).collect())
+          .collect();
+
+        for frame in frame_iter {
+          for (i, pixel) in frame.iter().enumerate() {
+            let prev = matrix[i].last_mut();
+            match prev {
+              Some(prev_pixel) => {
+                if prev_pixel.color == pixel.color {
+                  prev_pixel.duration += 1;
+                } else {
+                  let next_pixel = FramePixel {
+                    color: pixel.color.clone(),
+                    duration: 1,
+                  };
+                  matrix[i].push(next_pixel);
+                }
+              },
+              None => {
                 let next_pixel = FramePixel {
-                  color: enc_col,
+                  color: pixel.color.clone(),
                   duration: 1,
                 };
-                frame_stack.push(next_pixel);
-              }
-            },
-            None => {
-              let next_pixel = FramePixel {
-                color: enc_col,
-                duration: 1,
-              };
-              frame_stack.push(next_pixel);
-            },
-          };
+                matrix[i].push(next_pixel);
+              },
+            };
+          }
         }
-        frame_stack
-      })
-      .collect();
 
-    Sequence {
-      min_delay,
-      frames,
-      dimensions,
+        let sequence = Sequence {
+          min_delay: *min_delay,
+          matrix,
+          dimensions,
+        };
+        Ok(sequence)
+      }
     }
   }
 
-  pub fn to_json(&self) -> String {
+  pub fn stringify(&self) -> String {
     let frame_stack_str = self
-      .frames
+      .matrix
       .iter()
       .fold(String::new(), |frame_acc, frame| {
-        let frame_str = frame.iter().fold(String::new(), |pixel_acc, pixel| {
-          let comma = if pixel_acc.len() > 0 {
-            ","
-          } else {
-            ""
-          };
-          format!(
-            "{}{}[\"{}\",{}]",
-            pixel_acc,
-            comma,
-            pixel.color,
-            pixel.duration,
-          )
-        });
+        let frame_str = frame
+          .iter()
+          .fold(String::new(), |pixel_acc, pixel| {
+            let comma = if pixel_acc.len() > 0 {
+              ","
+            } else {
+              ""
+            };
+            format!(
+              "{}{}[\"{}\",{}]",
+              pixel_acc,
+              comma,
+              pixel.color,
+              pixel.duration,
+            )
+          });
         let comma = if frame_acc.len() > 0 {
           ","
         } else {
@@ -169,7 +199,6 @@ impl Sequence {
           frame_str,
         )
       });
-    
     format!("[{}]", frame_stack_str)
   }
 }
@@ -183,8 +212,10 @@ fn rgb_to_rgb(pixel: &Rgb<u8>) -> [u8; 3] {
 }
 
 
-fn resize<I: GenericImageView + 'static>(buf: &I, dimensions: Dimensions)
-  -> ImageBuffer<I::Pixel, Vec<<I::Pixel as Pixel>::Subpixel>>
+fn resize<I: GenericImageView + 'static>(
+  buf: &I,
+  dimensions: Dimensions,
+) -> ImageBuffer<I::Pixel, Vec<<I::Pixel as Pixel>::Subpixel>>
 where
   I::Pixel: 'static,
   <I::Pixel as Pixel>::Subpixel: 'static,
@@ -197,7 +228,10 @@ where
   )
 }
 
-fn scale_dimensions(dimensions: Dimensions, width: u32) -> Dimensions {
+fn scale_dimensions(
+  dimensions: Dimensions,
+  width: u32,
+) -> Dimensions {
   let ratio = width as f32 / dimensions.0 as f32;
   let height = (dimensions.1 as f32 * ratio) as u32;
   (width, height)
@@ -207,34 +241,44 @@ fn to_dimensions(dimensions: (u64, u64)) -> Dimensions {
   (dimensions.0 as u32, dimensions.1 as u32)
 }
 
-fn gif_to_seq(buf: File, max_width: u32) -> RasterizationData {
-  let gif = image::gif::Decoder::new(buf).unwrap();
+fn gif_to_seq<T>(
+  gif: image::gif::Decoder<T>,
+  max_width: u32,
+) -> RasterizationData
+  where T: std::io::Read
+{
   let dimensions = to_dimensions(gif.dimensions());
   let scaled_dimensions = scale_dimensions(
     dimensions,
     max_width,  
   );
 
-  let gif_frames = gif
+  let f: Vec<Result<image::Frame, image::ImageError>> = gif
     .into_frames()
-    .map(|wrapped_frame| wrapped_frame.unwrap());
+    .collect();
 
-  let f = gif_frames
-    .map(|frame: image::Frame| {
+  let frames: Vec<(PixelVec, u16)> = f
+    .par_iter()
+    .map(|wrapped_frame: &Result<image::Frame, image::ImageError>| {
+      let frame: &image::Frame = &wrapped_frame.as_ref().unwrap();
       let delay = frame.delay().to_integer();
-      let frame_buf: RgbaImage = frame.into_buffer();
-      let data = resize(&frame_buf, scaled_dimensions);
+      let frame_buf: &RgbaImage = frame.buffer();
+      let data = resize(frame_buf, scaled_dimensions);
       let pixels = data.pixels().map(|p| rgba_to_rgb(p)).collect();
       (pixels, delay)
-    });
+    })
+    .collect();
 
   RasterizationData {
     dimensions: scaled_dimensions,
-    frames: f.collect(),
+    frames,
   }
 }
 
-fn static_to_seq<Dec>(decoder: Dec, max_width: u32) -> RasterizationData
+fn static_to_seq<Dec>(
+  decoder: Dec,
+  max_width: u32,
+) -> RasterizationData
   where Dec: ImageDecoder
 {
   let dimensions = to_dimensions(decoder.dimensions());
@@ -247,7 +291,7 @@ fn static_to_seq<Dec>(decoder: Dec, max_width: u32) -> RasterizationData
   let img_vec = decoder
     .read_image()
     .unwrap()
-    .iter()
+    .par_iter()
     .enumerate()
     .filter(|(i, _val)| {
       match color_type {
@@ -275,16 +319,31 @@ fn static_to_seq<Dec>(decoder: Dec, max_width: u32) -> RasterizationData
   }
 }
 
-fn to_seq(buf: File, mimetype: SupportedImageFormats, max_width: u32) -> RasterizationData {
+fn to_seq<T>(
+  buf: T,
+  mimetype: SupportedImageFormats,
+  max_width: u32,
+) -> Result<RasterizationData, image::ImageError>
+  where T: std::io::Read
+{
   match mimetype {
-    SupportedImageFormats::GIF => gif_to_seq(buf, max_width),
+    SupportedImageFormats::GIF => {
+      match image::gif::Decoder::new(buf) {
+        Ok(gif) => Ok(gif_to_seq(gif, max_width)),
+        Err(err) => Err(err),
+      }
+    },
     SupportedImageFormats::PNG => {
-      let png = image::png::PNGDecoder::new(buf).unwrap();
-      static_to_seq(png, max_width)
+      match image::png::PNGDecoder::new(buf) {
+        Ok(png) => Ok(static_to_seq(png, max_width)),
+        Err(err) => Err(err),
+      }
     },
     SupportedImageFormats::JPEG => {
-      let jpeg = image::jpeg::JPEGDecoder::new(buf).unwrap();
-      static_to_seq(jpeg, max_width)
+      match image::jpeg::JPEGDecoder::new(buf) {
+        Ok(jpeg) => Ok(static_to_seq(jpeg, max_width)),
+        Err(err) => Err(err),
+      }
     },
   }
 }
