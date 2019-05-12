@@ -77,22 +77,18 @@ impl Sequence {
     bit_depth: u32,
     max_width: u32,
   ) -> Result<Sequence, ImageError> where T: std::io::Read {
-    println!("get_r_data");
     let data = get_r_data(buffer, mimetype);
 
     match data {
       Err(err) => Err(err),
       Ok(data) => {
-        println!("get_frames");
         let (frames, min_delay, scaled_dimensions) = get_frames(data, max_width);
-        println!("get_matrix");
         let matrix = get_matrix(frames, scaled_dimensions, bit_depth);
         let sequence = Sequence {
           min_delay,
           matrix,
           dimensions: scaled_dimensions,
         };
-        println!("done");
         Ok(sequence)
       }
     }
@@ -183,11 +179,6 @@ fn gif_get_r_data<T>(
 
   let wrapped_frames: Vec<Result<Frame, ImageError>> = decoder
     .into_frames()
-    .enumerate()
-    .map(|(i, x)| {
-      println!(">>> {}", i);
-      x
-    })
     .collect();
 
   let frames: Vec<(Vec<u8>, u16)> = wrapped_frames
@@ -305,11 +296,6 @@ fn get_frames(
       let buffer = resize(&frame_buf, scaled_dimensions);
       let pixels = buffer.pixels().map(|p| rgb_to_rgb(p)).collect();
       pixels
-    })
-    .enumerate()
-    .map(|(i, x)| {
-      println!("{}", i);
-      x
     })
     .collect();
 
