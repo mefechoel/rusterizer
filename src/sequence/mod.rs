@@ -1,15 +1,17 @@
 extern crate image;
 extern crate rayon;
 
-#[path="../bitfield/mod.rs"]
+#[path = "../bitfield/mod.rs"]
 mod bitfield;
-#[path="../base_converter/mod.rs"]
+#[path = "../base_converter/mod.rs"]
 mod base_converter;
 
 use self::bitfield::BitField;
 use self::base_converter::BaseConverter;
 
 use image::{
+  Frame,
+  ImageError,
   Pixel,
   ImageBuffer,
   ColorType,
@@ -57,7 +59,8 @@ struct FramePixel {
 #[derive(Debug)]
 struct RasterizationData {
   dimensions: Dimensions,
-  frames: Vec<(PixelVec, u16)>,
+  frames: Vec<(Vec<u8>, u16)>,
+  color_type: ColorType,
 }
 
 #[derive(Debug)]
@@ -73,94 +76,23 @@ impl Sequence {
     mimetype: SupportedImageFormats,
     bit_depth: u32,
     max_width: u32,
-  ) -> Result<Sequence, image::ImageError> where T: std::io::Read {
-    let loss = 2_u32.pow(COLOR_BIT_DEPTH - bit_depth);
-
-    let bitfield = BitField::new(
-      vec![bit_depth, bit_depth, bit_depth],
-    );
-    let alphabet = String::from(
-      "!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~",
-    );
-    let base_encoder = BaseConverter::new(alphabet);
-
-    let data = to_seq(buffer, mimetype, max_width);
+  ) -> Result<Sequence, ImageError> where T: std::io::Read {
+    println!("get_r_data");
+    let data = get_r_data(buffer, mimetype);
 
     match data {
       Err(err) => Err(err),
       Ok(data) => {
-        let dimensions = data.dimensions;
-        let (pixel_frames, delays): (Vec<PixelVec>, Vec<u16>) = data
-          .frames
-          .into_par_iter()
-          .unzip();
-
-        let max = 2_u16.pow(15);
-        let min_delay = delays
-          .par_iter()
-          .reduce(|| &max, |acc, delay| {
-            if delay < &acc {
-              delay
-            } else {
-              acc
-            }
-          });
-
-        let mut matrix: Vec<Vec<FramePixel>> = Vec::with_capacity(
-          (dimensions.0 * dimensions.1) as usize,
-        );
-        for _ in 0..(dimensions.0 * dimensions.1) {
-          matrix.push(Vec::<FramePixel>::new());
-        }
-
-        let frame_iter: Vec<Vec<FramePixel>> = pixel_frames
-          .par_iter()
-          .map(|pixels| pixels.par_iter().map(|pixel| {
-            let resized_col = vec![
-              (pixel[0] as u32) / loss,
-              (pixel[1] as u32) / loss,
-              (pixel[2] as u32) / loss,
-            ];
-            let bf_col = bitfield.encode(resized_col);
-            let enc_col = base_encoder.encode(bf_col as usize);
-            FramePixel {
-              color: enc_col,
-              duration: 1_u16,
-            }
-          }).collect())
-          .collect();
-
-        for frame in frame_iter {
-          for (i, pixel) in frame.iter().enumerate() {
-            let prev = matrix[i].last_mut();
-            match prev {
-              Some(prev_pixel) => {
-                if prev_pixel.color == pixel.color {
-                  prev_pixel.duration += 1;
-                } else {
-                  let next_pixel = FramePixel {
-                    color: pixel.color.clone(),
-                    duration: 1,
-                  };
-                  matrix[i].push(next_pixel);
-                }
-              },
-              None => {
-                let next_pixel = FramePixel {
-                  color: pixel.color.clone(),
-                  duration: 1,
-                };
-                matrix[i].push(next_pixel);
-              },
-            };
-          }
-        }
-
+        println!("get_frames");
+        let (frames, min_delay, scaled_dimensions) = get_frames(data, max_width);
+        println!("get_matrix");
+        let matrix = get_matrix(frames, scaled_dimensions, bit_depth);
         let sequence = Sequence {
-          min_delay: *min_delay,
+          min_delay,
           matrix,
-          dimensions,
+          dimensions: scaled_dimensions,
         };
+        println!("done");
         Ok(sequence)
       }
     }
@@ -241,109 +173,220 @@ fn to_dimensions(dimensions: (u64, u64)) -> Dimensions {
   (dimensions.0 as u32, dimensions.1 as u32)
 }
 
-fn gif_to_seq<T>(
-  gif: image::gif::Decoder<T>,
-  max_width: u32,
+fn gif_get_r_data<T>(
+  decoder: image::gif::Decoder<T>,
 ) -> RasterizationData
   where T: std::io::Read
 {
-  let dimensions = to_dimensions(gif.dimensions());
-  let scaled_dimensions = scale_dimensions(
-    dimensions,
-    max_width,  
-  );
+  let dimensions = to_dimensions(decoder.dimensions());
+  let color_type = decoder.colortype();
 
-  let f: Vec<Result<image::Frame, image::ImageError>> = gif
+  let wrapped_frames: Vec<Result<Frame, ImageError>> = decoder
     .into_frames()
+    .enumerate()
+    .map(|(i, x)| {
+      println!(">>> {}", i);
+      x
+    })
     .collect();
 
-  let frames: Vec<(PixelVec, u16)> = f
+  let frames: Vec<(Vec<u8>, u16)> = wrapped_frames
     .par_iter()
-    .map(|wrapped_frame: &Result<image::Frame, image::ImageError>| {
-      let frame: &image::Frame = &wrapped_frame.as_ref().unwrap();
+    .map(|wrapped_frame: &Result<Frame, ImageError>| {
+      let frame: &Frame = &wrapped_frame.as_ref().unwrap();
       let delay = frame.delay().to_integer();
-      let frame_buf: &RgbaImage = frame.buffer();
-      let data = resize(frame_buf, scaled_dimensions);
-      let pixels = data.pixels().map(|p| rgba_to_rgb(p)).collect();
-      (pixels, delay)
+      let frame_buf = frame.buffer().to_vec();
+      (frame_buf, delay)
     })
     .collect();
 
   RasterizationData {
-    dimensions: scaled_dimensions,
+    dimensions,
     frames,
+    color_type,
   }
 }
 
-fn static_to_seq<Dec>(
-  decoder: Dec,
-  max_width: u32,
-) -> RasterizationData
+fn static_get_r_data<Dec>(decoder: Dec) -> RasterizationData
   where Dec: ImageDecoder
 {
   let dimensions = to_dimensions(decoder.dimensions());
-  let scaled_dimensions = scale_dimensions(
-    dimensions,
-    max_width,
-  );
   let color_type = decoder.colortype();
 
   let img_vec = decoder
     .read_image()
-    .unwrap()
-    .par_iter()
-    .enumerate()
-    .filter(|(i, _val)| {
-      match color_type {
-        ColorType::RGBA(8) => (i + 1) % 4 != 0,
-        _ => true,
-      }
-    })
-    .map(|(_i, val)| val + 0)
-    .collect();
+    .unwrap();
 
-  let frame_buf: RgbImage = RgbImage::from_vec(
-    dimensions.0,
-    dimensions.1,
-    img_vec,
-  ).unwrap();
-
-  let data = resize(&frame_buf, scaled_dimensions);
-  let pixels = data.pixels().map(|p| rgb_to_rgb(p)).collect();
   let min_delay: u16 = 1000;
-  let frame = (pixels, min_delay);
+  let frames = vec![(img_vec, min_delay)];
 
   RasterizationData {
-    dimensions: scaled_dimensions,
-    frames: vec![frame],
+    dimensions,
+    frames,
+    color_type,
   }
 }
 
-fn to_seq<T>(
+fn get_r_data<T>(
   buf: T,
   mimetype: SupportedImageFormats,
-  max_width: u32,
-) -> Result<RasterizationData, image::ImageError>
+) -> Result<RasterizationData, ImageError>
   where T: std::io::Read
 {
   match mimetype {
     SupportedImageFormats::GIF => {
       match image::gif::Decoder::new(buf) {
-        Ok(gif) => Ok(gif_to_seq(gif, max_width)),
+        Ok(gif) => Ok(gif_get_r_data(gif)),
         Err(err) => Err(err),
       }
     },
     SupportedImageFormats::PNG => {
       match image::png::PNGDecoder::new(buf) {
-        Ok(png) => Ok(static_to_seq(png, max_width)),
+        Ok(png) => Ok(static_get_r_data(png)),
         Err(err) => Err(err),
       }
     },
     SupportedImageFormats::JPEG => {
       match image::jpeg::JPEGDecoder::new(buf) {
-        Ok(jpeg) => Ok(static_to_seq(jpeg, max_width)),
+        Ok(jpeg) => Ok(static_get_r_data(jpeg)),
         Err(err) => Err(err),
       }
     },
   }
+}
+
+fn get_frames(
+  data: RasterizationData,
+  max_width: u32,
+) -> (Vec<PixelVec>, u16, Dimensions) {
+  let dimensions = data.dimensions;
+  let color_type = data.color_type;
+  let scaled_dimensions = scale_dimensions(
+    dimensions,
+    max_width,
+  );
+
+  let (frames, delays): (Vec<Vec<u8>>, Vec<u16>) = data
+    .frames
+    .into_par_iter()
+    .unzip();
+
+  let max = 2_u16.pow(15);
+  let min_delay = delays
+    .par_iter()
+    .reduce(|| &max, |acc, delay| {
+      if delay < &acc {
+        delay
+      } else {
+        acc
+      }
+    });
+
+  let pixel_frames = frames
+    .par_iter()
+    .map(|frame: &Vec<u8>| frame
+      .par_iter()
+      .enumerate()
+      .filter(|(i, _val)| {
+        match color_type {
+          ColorType::RGBA(8) => (i + 1) % 4 != 0,
+          _ => true,
+        }
+      })
+      .map(|(_i, val)| val + 0)
+      .collect()
+    )
+    .map(|frame| {
+      let frame_buf: RgbImage = RgbImage::from_vec(
+        dimensions.0,
+        dimensions.1,
+        frame,
+      ).unwrap();
+      let buffer = resize(&frame_buf, scaled_dimensions);
+      let pixels = buffer.pixels().map(|p| rgb_to_rgb(p)).collect();
+      pixels
+    })
+    .enumerate()
+    .map(|(i, x)| {
+      println!("{}", i);
+      x
+    })
+    .collect();
+
+  (pixel_frames, *min_delay, scaled_dimensions)
+}
+
+fn get_matrix(
+  pixel_frames: Vec<Vec<Col>>,
+  dimensions: Dimensions,
+  bit_depth: u32,
+) -> Vec<Vec<FramePixel>> {
+  let loss = 2_u32.pow(COLOR_BIT_DEPTH - bit_depth);
+  let bitfield = create_bitfield_encoder(bit_depth);
+  let base_encoder = create_base_encoder();
+
+  let mut matrix: Vec<Vec<FramePixel>> = Vec::with_capacity(
+    (dimensions.0 * dimensions.1) as usize,
+  );
+  for _ in 0..(dimensions.0 * dimensions.1) {
+    matrix.push(Vec::<FramePixel>::new());
+  }
+
+  let frame_iter: Vec<Vec<FramePixel>> = pixel_frames
+    .par_iter()
+    .map(|pixels| pixels.par_iter().map(|pixel| {
+      let resized_col = vec![
+        (pixel[0] as u32) / loss,
+        (pixel[1] as u32) / loss,
+        (pixel[2] as u32) / loss,
+      ];
+      let bf_col = bitfield.encode(resized_col);
+      let enc_col = base_encoder.encode(bf_col as usize);
+      FramePixel {
+        color: enc_col,
+        duration: 1_u16,
+      }
+    }).collect())
+    .collect();
+
+  for frame in frame_iter {
+    for (i, pixel) in frame.iter().enumerate() {
+      let prev = matrix[i].last_mut();
+      match prev {
+        Some(prev_pixel) => {
+          if prev_pixel.color == pixel.color {
+            prev_pixel.duration += 1;
+          } else {
+            let next_pixel = FramePixel {
+              color: pixel.color.clone(),
+              duration: 1,
+            };
+            matrix[i].push(next_pixel);
+          }
+        },
+        None => {
+          let next_pixel = FramePixel {
+            color: pixel.color.clone(),
+            duration: 1,
+          };
+          matrix[i].push(next_pixel);
+        },
+      };
+    }
+  }
+
+  matrix
+}
+
+fn create_bitfield_encoder(bit_depth: u32) -> BitField {
+  BitField::new(
+    vec![bit_depth, bit_depth, bit_depth],
+  )
+}
+
+fn create_base_encoder() -> BaseConverter {
+  let alphabet = String::from(
+    "!#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+  );
+  BaseConverter::new(alphabet)
 }
