@@ -5,9 +5,12 @@ extern crate rayon;
 mod bitfield;
 #[path = "../base_converter/mod.rs"]
 mod base_converter;
+#[path = "../timestamp/mod.rs"]
+mod timestamp;
 
 use self::bitfield::BitField;
 use self::base_converter::BaseConverter;
+use self::timestamp::timestamp;
 
 use image::{
   Frame,
@@ -18,10 +21,7 @@ use image::{
   GenericImageView,
   AnimationDecoder,
   ImageDecoder,
-  RgbaImage,
   RgbImage,
-  Rgba,
-  Rgb,
   imageops,
 };
 use rayon::prelude::*;
@@ -77,13 +77,28 @@ impl Sequence {
     bit_depth: u32,
     max_width: u32,
   ) -> Result<Sequence, ImageError> where T: std::io::Read {
+    println!("starting...");
+    let r_data_start = timestamp();
     let data = get_r_data(buffer, mimetype);
+    println!("r_data: {}", timestamp() - r_data_start);
 
     match data {
       Err(err) => Err(err),
       Ok(data) => {
-        let (frames, min_delay, scaled_dimensions) = get_frames(data, max_width);
-        let matrix = get_matrix(frames, scaled_dimensions, bit_depth);
+        let frames_start = timestamp();
+        let (
+          frames,
+          min_delay,
+          scaled_dimensions,
+        ) = get_frames(data, max_width);
+        println!("frames: {}", timestamp() - frames_start);
+        let matrix_start = timestamp();
+        let matrix = get_matrix(
+          frames,
+          scaled_dimensions,
+          bit_depth,
+        );
+        println!("matrix: {}", timestamp() - matrix_start);
         let sequence = Sequence {
           min_delay,
           matrix,
@@ -131,15 +146,6 @@ impl Sequence {
   }
 }
 
-fn rgba_to_rgb(pixel: &Rgba<u8>) -> [u8; 3] {
-  [pixel.data[0], pixel.data[1], pixel.data[2]]
-}
-
-fn rgb_to_rgb(pixel: &Rgb<u8>) -> [u8; 3] {
-  [pixel.data[0], pixel.data[1], pixel.data[2]]
-}
-
-
 fn resize<I: GenericImageView + 'static>(
   buf: &I,
   dimensions: Dimensions,
@@ -181,12 +187,12 @@ fn gif_get_r_data<T>(
     .into_frames()
     .collect();
 
-  let frames: Vec<(Vec<u8>, u16)> = wrapped_frames
-    .par_iter()
-    .map(|wrapped_frame: &Result<Frame, ImageError>| {
-      let frame: &Frame = &wrapped_frame.as_ref().unwrap();
+  let frames = wrapped_frames
+    .into_par_iter()
+    .map(|wrapped_frame: Result<Frame, ImageError>| {
+      let frame: Frame = wrapped_frame.unwrap();
       let delay = frame.delay().to_integer();
-      let frame_buf = frame.buffer().to_vec();
+      let frame_buf = frame.into_buffer().into_vec();
       (frame_buf, delay)
     })
     .collect();
@@ -262,7 +268,7 @@ fn get_frames(
     .into_par_iter()
     .unzip();
 
-  let max = 2_u16.pow(15);
+  let max = (2_u32.pow(16) - 1) as u16;
   let min_delay = delays
     .par_iter()
     .reduce(|| &max, |acc, delay| {
@@ -273,7 +279,7 @@ fn get_frames(
       }
     });
 
-  let pixel_frames = frames
+  let pixel_frames: Vec<PixelVec> = frames
     .par_iter()
     .map(|frame: &Vec<u8>| frame
       .par_iter()
@@ -294,7 +300,10 @@ fn get_frames(
         frame,
       ).unwrap();
       let buffer = resize(&frame_buf, scaled_dimensions);
-      let pixels = buffer.pixels().map(|p| rgb_to_rgb(p)).collect();
+      let pixels = buffer
+        .pixels()
+        .map(|p| [p[0], p[1], p[2]])
+        .collect();
       pixels
     })
     .collect();
@@ -303,7 +312,7 @@ fn get_frames(
 }
 
 fn get_matrix(
-  pixel_frames: Vec<Vec<Col>>,
+  pixel_frames: Vec<PixelVec>,
   dimensions: Dimensions,
   bit_depth: u32,
 ) -> Vec<Vec<FramePixel>> {
