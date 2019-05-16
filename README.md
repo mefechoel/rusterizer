@@ -11,7 +11,7 @@ rustup default nightly-2019-04-18
 
 ## starten
 
-Code kopilieren und ausführen:
+Code kompilieren und ausführen:
 ```bash
 cargo run
 ```
