@@ -180,7 +180,7 @@ where
     buf,
     dimensions.0,
     dimensions.1,
-    imageops::FilterType::Nearest,
+    imageops::FilterType::Lanczos3,
   )
 }
 
