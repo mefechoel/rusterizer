@@ -45,11 +45,6 @@ impl SupportedImageFormats {
 
 const COLOR_BIT_DEPTH: u32 = 8;
 
-type Col = [u8; 3];
-type Dimensions = (u32, u32);
-type PixelVec = Vec<Col>;
-type EncodedColor = String;
-
 #[derive(Debug, Clone)]
 struct FramePixel {
   color: EncodedColor,
@@ -63,11 +58,23 @@ struct RasterizationData {
   color_type: ColorType,
 }
 
-#[derive(Debug)]
+type Col = [u8; 3];
+type Dimensions = (u32, u32);
+type PixelVec = Vec<Col>;
+type EncodedColor = String;
+type Matrix = Vec<Vec<FramePixel>>;
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Sequence {
-  dimensions: Dimensions,
-  matrix: Vec<Vec<FramePixel>>,
-  min_delay: u16,
+  step_length: u16,
+  length: usize,
+  duration: usize,
+  width: u32,
+  height: u32,
+  matrices: Vec<String>,
+  num_chunks: usize,
+  max_chunk_size: usize,
+  bit_depth: u32,
 }
 
 impl Sequence {
@@ -86,12 +93,14 @@ impl Sequence {
       Err(err) => Err(err),
       Ok(data) => {
         let frames_start = timestamp();
+        let length = data.frames.len();
         let (
           frames,
           min_delay,
           scaled_dimensions,
         ) = get_frames(data, max_width);
         println!("frames: {}", timestamp() - frames_start);
+
         let matrix_start = timestamp();
         let matrix = get_matrix(
           frames,
@@ -99,51 +108,64 @@ impl Sequence {
           bit_depth,
         );
         println!("matrix: {}", timestamp() - matrix_start);
+
+        let stringify_start = timestamp();
+        let num_chunks: usize = 1;
+        let mut matrices: Vec<String> = Vec::<String>::with_capacity(num_chunks);
+        let stringified_matrix = stringify_matrix(matrix);
+        matrices.push(stringified_matrix);
+        println!("stringify: {}", timestamp() - stringify_start);
+
         let sequence = Sequence {
-          min_delay,
-          matrix,
-          dimensions: scaled_dimensions,
+          length,
+          step_length: min_delay,
+          duration: (min_delay as usize) * length,
+          matrices,
+          width: scaled_dimensions.0,
+          height: scaled_dimensions.1,
+          num_chunks,
+          max_chunk_size: length,
+          bit_depth,
         };
         Ok(sequence)
       }
     }
   }
+}
 
-  pub fn stringify(&self) -> String {
-    let frame_stack_str = self
-      .matrix
-      .iter()
-      .fold(String::new(), |frame_acc, frame| {
-        let frame_str = frame
-          .iter()
-          .fold(String::new(), |pixel_acc, pixel| {
-            let comma = if pixel_acc.len() > 0 {
-              ","
-            } else {
-              ""
-            };
-            format!(
-              "{}{}[\"{}\",{}]",
-              pixel_acc,
-              comma,
-              pixel.color,
-              pixel.duration,
-            )
-          });
-        let comma = if frame_acc.len() > 0 {
-          ","
-        } else {
-          ""
-        };
-        format!(
-          "{}{}[{}]",
-          frame_acc,
-          comma,
-          frame_str,
-        )
-      });
-    format!("[{}]", frame_stack_str)
-  }
+fn stringify_matrix(matrix: Matrix) -> String {
+  let frame_stack_str = matrix
+    .iter()
+    .fold(String::new(), |frame_acc, frame| {
+      let frame_str = frame
+        .iter()
+        .fold(String::new(), |pixel_acc, pixel| {
+          let comma = if pixel_acc.len() > 0 {
+            ","
+          } else {
+            ""
+          };
+          format!(
+            "{}{}[\"{}\",{}]",
+            pixel_acc,
+            comma,
+            pixel.color,
+            pixel.duration,
+          )
+        });
+      let comma = if frame_acc.len() > 0 {
+        ","
+      } else {
+        ""
+      };
+      format!(
+        "{}{}[{}]",
+        frame_acc,
+        comma,
+        frame_str,
+      )
+    });
+  format!("[{}]", frame_stack_str)
 }
 
 fn resize<I: GenericImageView + 'static>(
@@ -315,19 +337,19 @@ fn get_matrix(
   pixel_frames: Vec<PixelVec>,
   dimensions: Dimensions,
   bit_depth: u32,
-) -> Vec<Vec<FramePixel>> {
+) -> Matrix {
   let loss = 2_u32.pow(COLOR_BIT_DEPTH - bit_depth);
   let bitfield = create_bitfield_encoder(bit_depth);
   let base_encoder = create_base_encoder();
 
-  let mut matrix: Vec<Vec<FramePixel>> = Vec::with_capacity(
+  let mut matrix: Matrix = Vec::with_capacity(
     (dimensions.0 * dimensions.1) as usize,
   );
   for _ in 0..(dimensions.0 * dimensions.1) {
     matrix.push(Vec::<FramePixel>::new());
   }
 
-  let frame_iter: Vec<Vec<FramePixel>> = pixel_frames
+  let frame_iter: Matrix = pixel_frames
     .par_iter()
     .map(|pixels| pixels.par_iter().map(|pixel| {
       let resized_col = vec![

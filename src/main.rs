@@ -1,12 +1,14 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
 #[macro_use] extern crate rocket;
+#[macro_use] extern crate serde_derive;
 
 mod sequence;
 
 use std::io;
 use std::io::{Error, ErrorKind};
 use rocket::Data;
+use rocket_contrib::json::Json;
 
 use self::sequence::{
   Sequence,
@@ -19,7 +21,7 @@ fn rasterize(
   format: String,
   bit_depth: u32,
   max_width: u32,
-) -> io::Result<String> {
+) -> io::Result<Json<Sequence>> {
   match SupportedImageFormats::from(format) {
     None => Err(Error::new(
       ErrorKind::InvalidInput,
@@ -41,7 +43,7 @@ fn rasterize(
           ))
         },
         Ok(seq) => {
-          Ok(seq.stringify())
+          Ok(Json(seq))
         },
       }
     }
