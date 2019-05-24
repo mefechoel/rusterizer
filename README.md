@@ -15,3 +15,11 @@ Code kompilieren und ausführen:
 ```bash
 cargo run
 ```
+
+## production
+
+Unbedingt in release mode bauen!
+```bash
+cargo build --release
+cargo run --release
+```
