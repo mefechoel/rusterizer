@@ -23,3 +23,15 @@ Unbedingt in release mode bauen!
 cargo build --release
 cargo run --release
 ```
+
+## docker 
+
+1. Image bauen:
+```bash
+docker build -t rusterizer .
+```
+
+2. Container starten: 
+```bash 
+docker run -dP --restart always rusterizer
+```
