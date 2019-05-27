@@ -24,14 +24,14 @@ cargo build --release
 cargo run --release
 ```
 
-## docker 
+## docker
 
 1. Image bauen:
 ```bash
 docker build -t rusterizer .
 ```
 
-2. Container starten: 
-```bash 
-docker run -d -p 4757:4757 --restart always rusterizer
+2. Container starten:
+```bash
+docker run -d -p 4757:4757 --init --restart always rusterizer
 ```
