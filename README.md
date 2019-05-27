@@ -33,5 +33,5 @@ docker build -t rusterizer .
 
 2. Container starten: 
 ```bash 
-docker run -dP --restart always rusterizer
+docker run -d -p 4757:4757 --restart always rusterizer
 ```
