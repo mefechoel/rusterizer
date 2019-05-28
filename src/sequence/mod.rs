@@ -12,6 +12,7 @@ use self::bitfield::BitField;
 use self::base_converter::BaseConverter;
 use self::timestamp::timestamp;
 
+use std::io::{Error, ErrorKind};
 use image::{
   Frame,
   ImageError,
@@ -86,50 +87,47 @@ impl Sequence {
   ) -> Result<Sequence, ImageError> where T: std::io::Read {
     println!("starting...");
     let r_data_start = timestamp();
-    let data = get_r_data(buffer, mimetype);
+    let data = get_r_data(buffer, mimetype)?;
     println!("r_data: {}", timestamp() - r_data_start);
 
-    match data {
-      Err(err) => Err(err),
-      Ok(data) => {
-        let frames_start = timestamp();
-        let length = data.frames.len();
-        let (
-          frames,
-          min_delay,
-          scaled_dimensions,
-        ) = get_frames(data, max_width);
-        println!("frames: {}", timestamp() - frames_start);
+    let frames_start = timestamp();
+    let length = data.frames.len();
+    let (
+      frames,
+      min_delay,
+      scaled_dimensions,
+    ) = get_frames(data, max_width)?;
+    println!("frames: {}", timestamp() - frames_start);
 
-        let matrix_start = timestamp();
-        let matrix = get_matrix(
-          frames,
-          scaled_dimensions,
-          bit_depth,
-        );
-        println!("matrix: {}", timestamp() - matrix_start);
+    let matrix_start = timestamp();
+    let matrix = get_matrix(
+      frames,
+      scaled_dimensions,
+      bit_depth,
+    );
+    println!("matrix: {}", timestamp() - matrix_start);
 
-        let stringify_start = timestamp();
-        let num_chunks: usize = 1;
-        let mut matrices: Vec<String> = Vec::<String>::with_capacity(num_chunks);
-        let stringified_matrix = stringify_matrix(matrix);
-        matrices.push(stringified_matrix);
-        println!("stringify: {}", timestamp() - stringify_start);
+    let stringify_start = timestamp();
+    let num_chunks: usize = 1;
+    let mut matrices: Vec<String> = Vec::<String>::with_capacity(
+      num_chunks,
+    );
+    let stringified_matrix = stringify_matrix(matrix);
+    matrices.push(stringified_matrix);
+    println!("stringify: {}", timestamp() - stringify_start);
 
-        let sequence = Sequence {
-          length,
-          step_length: min_delay,
-          duration: (min_delay as usize) * length,
-          matrices,
-          width: scaled_dimensions.0,
-          height: scaled_dimensions.1,
-          num_chunks,
-          max_chunk_size: length,
-          bit_depth,
-        };
-        Ok(sequence)
-      }
-    }
+    let sequence = Sequence {
+      length,
+      step_length: min_delay,
+      duration: (min_delay as usize) * length,
+      matrices,
+      width: scaled_dimensions.0,
+      height: scaled_dimensions.1,
+      num_chunks,
+      max_chunk_size: length,
+      bit_depth,
+    };
+    Ok(sequence)
   }
 }
 
@@ -199,7 +197,7 @@ fn to_dimensions(dimensions: (u64, u64)) -> Dimensions {
 
 fn gif_get_r_data<T>(
   decoder: image::gif::Decoder<T>,
-) -> RasterizationData
+) -> Result<RasterizationData, ImageError>
   where T: std::io::Read
 {
   let dimensions = to_dimensions(decoder.dimensions());
@@ -209,41 +207,44 @@ fn gif_get_r_data<T>(
     .into_frames()
     .collect();
 
-  let frames = wrapped_frames
+  let frames: Result<Vec<(Vec<u8>, u16)>, _> = wrapped_frames
     .into_par_iter()
     .map(|wrapped_frame: Result<Frame, ImageError>| {
-      let frame: Frame = wrapped_frame.unwrap();
+      let frame: Frame = wrapped_frame?;
       let delay = frame.delay().to_integer();
       let frame_buf = frame.into_buffer().into_vec();
-      (frame_buf, delay)
+      Ok((frame_buf, delay))
     })
     .collect();
 
-  RasterizationData {
-    dimensions,
-    frames,
-    color_type,
+  match frames {
+    Ok(frames) => Ok(RasterizationData {
+      dimensions,
+      frames,
+      color_type,
+    }),
+    Err(e) => Err(e),
   }
 }
 
-fn static_get_r_data<Dec>(decoder: Dec) -> RasterizationData
+fn static_get_r_data<Dec>(
+  decoder: Dec,
+) -> Result<RasterizationData, ImageError>
   where Dec: ImageDecoder
 {
   let dimensions = to_dimensions(decoder.dimensions());
   let color_type = decoder.colortype();
 
-  let img_vec = decoder
-    .read_image()
-    .unwrap();
+  let img_vec = decoder.read_image()?;
 
   let min_delay: u16 = 1000;
   let frames = vec![(img_vec, min_delay)];
 
-  RasterizationData {
+  Ok(RasterizationData {
     dimensions,
     frames,
     color_type,
-  }
+  })
 }
 
 fn get_r_data<T>(
@@ -255,19 +256,19 @@ fn get_r_data<T>(
   match mimetype {
     SupportedImageFormats::GIF => {
       match image::gif::Decoder::new(buf) {
-        Ok(gif) => Ok(gif_get_r_data(gif)),
+        Ok(gif) => gif_get_r_data(gif),
         Err(err) => Err(err),
       }
     },
     SupportedImageFormats::PNG => {
       match image::png::PNGDecoder::new(buf) {
-        Ok(png) => Ok(static_get_r_data(png)),
+        Ok(png) => static_get_r_data(png),
         Err(err) => Err(err),
       }
     },
     SupportedImageFormats::JPEG => {
       match image::jpeg::JPEGDecoder::new(buf) {
-        Ok(jpeg) => Ok(static_get_r_data(jpeg)),
+        Ok(jpeg) => static_get_r_data(jpeg),
         Err(err) => Err(err),
       }
     },
@@ -277,7 +278,7 @@ fn get_r_data<T>(
 fn get_frames(
   data: RasterizationData,
   max_width: u32,
-) -> (Vec<PixelVec>, u16, Dimensions) {
+) -> Result<(Vec<PixelVec>, u16, Dimensions), ImageError> {
   let dimensions = data.dimensions;
   let color_type = data.color_type;
   let scaled_dimensions = scale_dimensions(
@@ -301,7 +302,7 @@ fn get_frames(
       }
     });
 
-  let pixel_frames: Vec<PixelVec> = frames
+  let pixel_frames: Result<Vec<PixelVec>, ImageError> = frames
     .par_iter()
     .map(|frame: &Vec<u8>| frame
       .par_iter()
@@ -316,21 +317,36 @@ fn get_frames(
       .collect()
     )
     .map(|frame| {
-      let frame_buf: RgbImage = RgbImage::from_vec(
+      let frame_buf: Option<RgbImage> = RgbImage::from_vec(
         dimensions.0,
         dimensions.1,
         frame,
-      ).unwrap();
-      let buffer = resize(&frame_buf, scaled_dimensions);
-      let pixels = buffer
-        .pixels()
-        .map(|p| [p[0], p[1], p[2]])
-        .collect();
-      pixels
+      );
+      match frame_buf {
+        Some(frame_buf) => {
+          let buffer = resize(&frame_buf, scaled_dimensions);
+          let pixels = buffer
+            .pixels()
+            .map(|p| [p[0], p[1], p[2]])
+            .collect();
+          Ok(pixels)
+        },
+        None => Err(ImageError::from(Error::new(
+          ErrorKind::InvalidData,
+          String::from("No frame found"),
+        ))),
+      }
     })
     .collect();
 
-  (pixel_frames, *min_delay, scaled_dimensions)
+  match pixel_frames {
+    Ok(pixel_frames) => Ok((
+      pixel_frames,
+      *min_delay,
+      scaled_dimensions,
+    )),
+    Err(e) => Err(e),
+  }
 }
 
 fn get_matrix(
