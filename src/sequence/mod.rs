@@ -132,38 +132,27 @@ impl Sequence {
 }
 
 fn stringify_matrix(matrix: Matrix) -> String {
-  let frame_stack_str = matrix
-    .iter()
-    .fold(String::new(), |frame_acc, frame| {
-      let frame_str = frame
-        .iter()
-        .fold(String::new(), |pixel_acc, pixel| {
-          let comma = if pixel_acc.len() > 0 {
-            ","
-          } else {
-            ""
-          };
-          format!(
-            "{}{}[\"{}\",{}]",
-            pixel_acc,
-            comma,
-            pixel.color,
-            pixel.duration,
-          )
-        });
-      let comma = if frame_acc.len() > 0 {
-        ","
-      } else {
-        ""
-      };
-      format!(
-        "{}{}[{}]",
-        frame_acc,
-        comma,
-        frame_str,
-      )
-    });
-  format!("[{}]", frame_stack_str)
+  let mut stack = String::new();
+  stack.push('[');
+  for (i, frame) in matrix.iter().enumerate() {
+    if i != 0 {
+      stack.push(',');
+    }
+    stack.push('[');
+    for (j, pixel) in frame.iter().enumerate() {
+      if j != 0 {
+        stack.push(',');
+      }
+      stack.push_str("[\"");
+      stack.push_str(&pixel.color);
+      stack.push_str("\",");
+      stack.push_str(&pixel.duration.to_string());
+      stack.push(']');
+    }
+    stack.push(']');
+  }
+  stack.push(']');
+  stack
 }
 
 fn resize<I: GenericImageView + 'static>(
