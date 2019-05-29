@@ -7,10 +7,16 @@ mod bitfield;
 mod base_converter;
 #[path = "../timestamp/mod.rs"]
 mod timestamp;
+mod image_formats;
+mod frame_pixel;
+mod rasterization_data;
 
 use self::bitfield::BitField;
 use self::base_converter::BaseConverter;
 use self::timestamp::timestamp;
+use self::frame_pixel::FramePixel;
+use self::rasterization_data::{RasterizationData, Dimensions};
+pub use self::image_formats::SupportedImageFormats;
 
 use std::io::{Error, ErrorKind};
 use image::{
@@ -27,42 +33,10 @@ use image::{
 };
 use rayon::prelude::*;
 
-pub enum SupportedImageFormats {
-  GIF,
-  PNG,
-  JPEG,
-}
-
-impl SupportedImageFormats {
-  pub fn from(mimetype: String) -> Option<SupportedImageFormats> {
-    match mimetype.as_ref() {
-      "png" => Some(SupportedImageFormats::PNG),
-      "jpeg" => Some(SupportedImageFormats::JPEG),
-      "gif" => Some(SupportedImageFormats::GIF),
-      _ => None,
-    }
-  }
-}
-
 const COLOR_BIT_DEPTH: u32 = 8;
 
-#[derive(Debug, Clone)]
-struct FramePixel {
-  color: EncodedColor,
-  duration: u16,
-}
-
-#[derive(Debug)]
-struct RasterizationData {
-  dimensions: Dimensions,
-  frames: Vec<(Vec<u8>, u16)>,
-  color_type: ColorType,
-}
-
 type Col = [u8; 3];
-type Dimensions = (u32, u32);
 type PixelVec = Vec<Col>;
-type EncodedColor = String;
 type Matrix = Vec<Vec<FramePixel>>;
 
 #[derive(Debug, Serialize, Deserialize)]
