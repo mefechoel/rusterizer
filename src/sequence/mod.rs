@@ -367,20 +367,10 @@ fn get_matrix(
           if prev_pixel.color == pixel.color {
             prev_pixel.duration += 1;
           } else {
-            let next_pixel = FramePixel {
-              color: pixel.color.clone(),
-              duration: 1,
-            };
-            matrix[i].push(next_pixel);
+            matrix[i].push(pixel.clone());
           }
         },
-        None => {
-          let next_pixel = FramePixel {
-            color: pixel.color.clone(),
-            duration: 1,
-          };
-          matrix[i].push(next_pixel);
-        },
+        None => matrix[i].push(pixel.clone()),
       };
     }
   }
