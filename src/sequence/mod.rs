@@ -360,17 +360,17 @@ fn get_matrix(
     .collect();
 
   for frame in frame_iter {
-    for (i, pixel) in frame.iter().enumerate() {
+    for (i, pixel) in frame.into_iter().enumerate() {
       let prev = matrix[i].last_mut();
       match prev {
         Some(prev_pixel) => {
           if prev_pixel.color == pixel.color {
             prev_pixel.duration += 1;
           } else {
-            matrix[i].push(pixel.clone());
+            matrix[i].push(pixel);
           }
         },
-        None => matrix[i].push(pixel.clone()),
+        None => matrix[i].push(pixel),
       };
     }
   }
