@@ -279,13 +279,18 @@ fn get_frames(
     .map(|frame: &Vec<u8>| frame
       .par_iter()
       .enumerate()
-      .filter(|(i, _val)| {
+      .filter_map(|(i, val)| {
         match color_type {
-          ColorType::RGBA(8) => (i + 1) % 4 != 0,
-          _ => true,
+          ColorType::RGBA(8) => {
+            if (i + 1) % 4 != 0 {
+              Some(val + 0)
+            } else {
+              None
+            }
+          },
+          _ => Some(val + 0),
         }
       })
-      .map(|(_i, val)| val + 0)
       .collect()
     )
     .map(|frame| {
