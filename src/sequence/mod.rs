@@ -108,22 +108,31 @@ impl Sequence {
 fn stringify_matrix(matrix: Matrix) -> String {
   let mut stack = String::new();
   stack.push('[');
-  for (i, frame) in matrix.iter().enumerate() {
+  let frame_strings: Vec<String> = matrix
+    .par_iter()
+    .map(|frame| {
+      let mut frame_stack = String::new();
+      frame_stack.push('[');
+      for (j, pixel) in frame.iter().enumerate() {
+        if j != 0 {
+          frame_stack.push(',');
+        }
+        frame_stack.push_str("[\"");
+        frame_stack.push_str(&pixel.color);
+        frame_stack.push_str("\",");
+        frame_stack.push_str(&pixel.duration.to_string());
+        frame_stack.push(']');
+      }
+      frame_stack.push(']');
+      frame_stack
+    })
+    .collect();
+
+  for (i, frame) in frame_strings.iter().enumerate() {
     if i != 0 {
       stack.push(',');
     }
-    stack.push('[');
-    for (j, pixel) in frame.iter().enumerate() {
-      if j != 0 {
-        stack.push(',');
-      }
-      stack.push_str("[\"");
-      stack.push_str(&pixel.color);
-      stack.push_str("\",");
-      stack.push_str(&pixel.duration.to_string());
-      stack.push(']');
-    }
-    stack.push(']');
+    stack.push_str(&frame);
   }
   stack.push(']');
   stack
