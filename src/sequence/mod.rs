@@ -179,7 +179,7 @@ fn gif_get_r_data<T>(
     .into_frames()
     .collect();
 
-  let frames: Result<Vec<(Vec<u8>, u16)>, _> = wrapped_frames
+  let frames: Result<Vec<(Vec<u8>, u16)>, ImageError> = wrapped_frames
     .into_par_iter()
     .map(|wrapped_frame: Result<Frame, ImageError>| {
       let frame: Frame = wrapped_frame?;
@@ -189,14 +189,11 @@ fn gif_get_r_data<T>(
     })
     .collect();
 
-  match frames {
-    Ok(frames) => Ok(RasterizationData {
-      dimensions,
-      frames,
-      color_type,
-    }),
-    Err(e) => Err(e),
-  }
+  Ok(RasterizationData {
+    dimensions,
+    frames: frames?,
+    color_type,
+  })
 }
 
 fn static_get_r_data<Dec>(
@@ -227,22 +224,16 @@ fn get_r_data<T>(
 {
   match mimetype {
     SupportedImageFormats::GIF => {
-      match image::gif::Decoder::new(buf) {
-        Ok(gif) => gif_get_r_data(gif),
-        Err(err) => Err(err),
-      }
+      let decoder = image::gif::Decoder::new(buf)?;
+      gif_get_r_data(decoder)
     },
     SupportedImageFormats::PNG => {
-      match image::png::PNGDecoder::new(buf) {
-        Ok(png) => static_get_r_data(png),
-        Err(err) => Err(err),
-      }
+      let decoder = image::png::PNGDecoder::new(buf)?;
+      static_get_r_data(decoder)
     },
     SupportedImageFormats::JPEG => {
-      match image::jpeg::JPEGDecoder::new(buf) {
-        Ok(jpeg) => static_get_r_data(jpeg),
-        Err(err) => Err(err),
-      }
+      let decoder = image::jpeg::JPEGDecoder::new(buf)?;
+      static_get_r_data(decoder)
     },
   }
 }
@@ -316,14 +307,11 @@ fn get_frames(
     })
     .collect();
 
-  match pixel_frames {
-    Ok(pixel_frames) => Ok((
-      pixel_frames,
-      *min_delay,
-      scaled_dimensions,
-    )),
-    Err(e) => Err(e),
-  }
+  Ok((
+    pixel_frames?,
+    *min_delay,
+    scaled_dimensions,
+  ))
 }
 
 fn get_matrix(
