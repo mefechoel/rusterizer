@@ -251,15 +251,15 @@ fn get_frames(
 
   let (frames, delays): (Vec<Vec<u8>>, Vec<u16>) = data
     .frames
-    .into_par_iter()
+    .into_iter()
     .unzip();
 
   let max = (2_u32.pow(16) - 1) as u16;
   let min_delay = delays
-    .par_iter()
-    .reduce(|| &max, |acc, delay| {
+    .iter()
+    .fold(max, |acc, delay| {
       if delay < &acc {
-        delay
+        *delay
       } else {
         acc
       }
@@ -268,7 +268,7 @@ fn get_frames(
   let pixel_frames: Result<Vec<PixelVec>, ImageError> = frames
     .par_iter()
     .map(|frame: &Vec<u8>| frame
-      .par_iter()
+      .iter()
       .enumerate()
       .filter_map(|(i, val)| {
         match color_type {
@@ -309,7 +309,7 @@ fn get_frames(
 
   Ok((
     pixel_frames?,
-    *min_delay,
+    min_delay,
     scaled_dimensions,
   ))
 }
@@ -332,7 +332,7 @@ fn get_matrix(
 
   let frame_iter: Matrix = pixel_frames
     .par_iter()
-    .map(|pixels| pixels.par_iter().map(|pixel| {
+    .map(|pixels| pixels.iter().map(|pixel| {
       let resized_col = vec![
         (pixel[0] as u32) / loss,
         (pixel[1] as u32) / loss,
