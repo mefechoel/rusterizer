@@ -35,3 +35,7 @@ docker build -t rusterizer .
 ```bash
 docker run -d -p 4757:8000 --init --restart always rusterizer
 ```
+*publish port directly to network interface*
+```bash
+docker run -d --init --network=host --restart always rusterizer
+```
