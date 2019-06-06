@@ -18,12 +18,12 @@ impl BitField {
       .clone()
       .into_iter()
       .enumerate()
-      .map(|(i, _x)| {
+      .map(|(ref i, _x)| {
         shape
           .clone()
           .into_iter()
           .enumerate()
-          .filter(|(j, _y)| j < &i)
+          .filter(|(j, _y)| j < i)
           .fold(0_u32, |acc, (_j, y)| acc + y)
       })
       .collect();
@@ -48,7 +48,7 @@ impl BitField {
     }
   }
 
-  pub fn encode(&self, data: Vec<u32>) -> u32 {
+  pub fn encode(&self, data: &[u32]) -> u32 {
     if data.len() != self.masks.len() {
       panic!(
         "the input data must have length {}. found length {}",
@@ -70,7 +70,7 @@ impl BitField {
     self
       .masks
       .iter()
-      .map(|m| (&bit_field & m.mask) >> m.shift)
+      .map(|m| (bit_field & m.mask) >> m.shift)
       .collect()
   }
 }

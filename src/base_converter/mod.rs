@@ -37,7 +37,7 @@ impl BaseConverter {
         str_repres,
       );
       num /= self.base;
-      if num <= 0 {
+      if num == 0 {
         break;
       }
     }

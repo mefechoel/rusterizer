@@ -256,30 +256,30 @@ fn get_frames(
 
   let max = (2_u32.pow(16) - 1) as u16;
   let min_delay = delays
-    .iter()
+    .into_iter()
     .fold(max, |acc, delay| {
-      if delay < &acc {
-        *delay
+      if delay < acc {
+        delay
       } else {
         acc
       }
     });
 
   let pixel_frames: Result<Vec<PixelVec>, ImageError> = frames
-    .par_iter()
-    .map(|frame: &Vec<u8>| frame
-      .iter()
+    .into_par_iter()
+    .map(|frame: Vec<u8>| frame
+      .into_iter()
       .enumerate()
       .filter_map(|(i, val)| {
         match color_type {
           ColorType::RGBA(8) => {
             if (i + 1) % 4 != 0 {
-              Some(val + 0)
+              Some(val)
             } else {
               None
             }
           },
-          _ => Some(val + 0),
+          _ => Some(val),
         }
       })
       .collect()
@@ -334,11 +334,11 @@ fn get_matrix(
     .par_iter()
     .map(|pixels| pixels.iter().map(|pixel| {
       let resized_col = vec![
-        (pixel[0] as u32) / loss,
-        (pixel[1] as u32) / loss,
-        (pixel[2] as u32) / loss,
+        u32::from(pixel[0]) / loss,
+        u32::from(pixel[1]) / loss,
+        u32::from(pixel[2]) / loss,
       ];
-      let bf_col = bitfield.encode(resized_col);
+      let bf_col = bitfield.encode(&resized_col);
       let enc_col = base_encoder.encode(bf_col as usize);
       FramePixel {
         color: enc_col,

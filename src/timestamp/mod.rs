@@ -1,11 +1,9 @@
 extern crate time;
 
-pub type Timestamp = f64;
-
-pub fn timestamp() -> Timestamp {
+pub fn timestamp() -> f64 {
   let timespec = time::get_time();
-  let mills: Timestamp = timespec.sec as Timestamp + (
-    timespec.nsec as Timestamp / 1000.0 / 1000.0 / 1000.0
+  let mills: f64 = timespec.sec as f64 * 1000.0 + (
+    f64::from(timespec.nsec) / 1000.0 / 1000.0
   );
   mills
 }
